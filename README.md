@@ -242,7 +242,7 @@ reshapes a ~100K-parameter trunk, not the encoder itself.
   effect without needing a cluster; `config.num_clients` is one line to raise.
 - **Dirichlet non-IID partitioning**, not a random/IID split — a random split
   would hide exactly the failure mode federated learning has to survive in
-  practice (see §6, §9 in `INTERVIEW_GUIDE.md`).
+  practice (see §6, §9 above).
 - **Sample-weighted FedAvg**, not unweighted averaging — a client with more
   local data should influence the global model proportionally more; verified
   against a hand-computed value in tests, not just "trust the library".
@@ -301,8 +301,6 @@ pytest
 ```
 FECL-EmotionAI/
 ├── README.md
-├── INTERVIEW_GUIDE.md
-├── RESUME_BULLETS.md
 ├── LICENSE
 ├── .gitignore
 ├── requirements.txt
