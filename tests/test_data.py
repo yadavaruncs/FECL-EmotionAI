@@ -38,7 +38,10 @@ def test_load_emotion_dataset_has_official_splits_with_no_leakage():
     assert len(overlap) / len(test_texts) < 0.01
 
 
-def test_get_frozen_embeddings_shape_and_cache_consistency():
+def test_get_frozen_embeddings_shape_and_cache_consistency(tmp_path):
+    # tmp_path: a fresh, empty cache dir per run, so the first call below
+    # really runs the encoder (instead of loading a file from an earlier run)
+    # and the test never writes into the project's real .cache/.
     config = get_default_config()
     texts = [
         "i am feeling really happy about this",
@@ -47,11 +50,33 @@ def test_get_frozen_embeddings_shape_and_cache_consistency():
     ]
     labels = np.array([1, 3, 4], dtype=np.int64)
 
-    embeddings_first, labels_first = get_frozen_embeddings(texts, labels, "unit_test_split", config)
-    embeddings_second, labels_second = get_frozen_embeddings(texts, labels, "unit_test_split", config)
+    assert list(tmp_path.iterdir()) == []
+    embeddings_first, labels_first = get_frozen_embeddings(
+        texts, labels, "unit_test_split", config, cache_dir=tmp_path
+    )
+    assert len(list(tmp_path.glob("*.npz"))) == 1  # encoded, then cached
+
+    embeddings_second, labels_second = get_frozen_embeddings(
+        texts, labels, "unit_test_split", config, cache_dir=tmp_path
+    )
 
     assert embeddings_first.shape == (3, config.embedding_dim)
+    assert np.isfinite(embeddings_first).all()
     assert np.array_equal(labels_first, labels)
     # Second call must hit the cache and return identical embeddings.
     assert np.allclose(embeddings_first, embeddings_second)
     assert np.array_equal(labels_second, labels)
+    assert len(list(tmp_path.glob("*.npz"))) == 1
+
+
+def test_embedding_cache_key_depends_on_texts_not_just_split_name(tmp_path):
+    config = get_default_config()
+    labels = np.array([1], dtype=np.int64)
+
+    happy, _ = get_frozen_embeddings(["i am so happy"], labels, "same_split", config, cache_dir=tmp_path)
+    angry, _ = get_frozen_embeddings(["i am furious"], labels, "same_split", config, cache_dir=tmp_path)
+
+    # Same split name, different sentences -> must be a separate cache entry
+    # with freshly computed (different) embeddings, never the stale ones.
+    assert len(list(tmp_path.glob("*.npz"))) == 2
+    assert not np.allclose(happy, angry)

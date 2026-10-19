@@ -5,10 +5,20 @@ This is REAL DP-SGD, not a hand-rolled noise hack:
   - per-sample gradient clipping to a fixed L2 norm (`dp_max_grad_norm`)
   - calibrated Gaussian noise added to the summed clipped gradients
     (`dp_noise_multiplier`)
-  - privacy accounting via Opacus's RDP accountant, so the (epsilon, delta)
-    reported in results.csv is the ACTUAL value computed by the accountant
-    for the number of steps/epochs/sampling-rate actually used -- never a
-    predetermined or hand-picked number.
+  - privacy accounting via Opacus's PRV (Privacy Random Variable) accountant
+    -- the Opacus default, requested explicitly below -- so the
+    (epsilon, delta) reported in results.csv is the ACTUAL value computed by
+    the accountant for the number of steps/epochs/sampling-rate actually used,
+    never a predetermined or hand-picked number. PRV gives a tighter epsilon
+    than the older RDP accountant for the same training (e.g. ~1.37 vs ~1.61
+    for the worst client at noise_multiplier=1.0 in this project).
+
+DP-SGD's guarantee assumes the loss is a SUM OF PER-EXAMPLE losses, so that
+each example's clipped gradient depends on that example alone. SupCon
+violates this (each sample's contrastive term depends on every other sample
+in the batch), so federated.py always trains DP clients with cross-entropy
+only. Opacus cannot detect a batch-coupled loss itself (unlike BatchNorm,
+which it rejects for the same reason).
 
 Each client trains its own local copy of the classification head, so each
 client accumulates its own, independent (epsilon, delta) privacy guarantee
@@ -48,7 +58,7 @@ def attach_privacy_engine(
     so far.
     """
     if privacy_engine is None:
-        privacy_engine = PrivacyEngine()
+        privacy_engine = PrivacyEngine(accountant="prv")
     with warnings.catch_warnings():
         # Expected: we intentionally build a fresh DataLoader for the same
         # client subset every round (same logical dataset, new Python object).

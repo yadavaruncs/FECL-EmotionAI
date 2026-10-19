@@ -36,9 +36,10 @@ def train_centralized(train_embeddings, train_labels, config):
         torch.tensor(train_embeddings, dtype=torch.float32),
         torch.tensor(train_labels, dtype=torch.long),
     )
-    # Same total local-update budget as one federated client would see across
-    # all rounds, so the comparison is not accidentally biased by "who saw the
-    # data more times": num_clients clients x num_rounds x local_epochs.
+    # Same number of passes over each sample as in federated training, so the
+    # comparison is not biased by "who saw the data more times": in FedAvg
+    # every sample is seen local_epochs times per round, i.e.
+    # num_rounds x local_epochs passes in total -- the same here.
     total_epochs = config.num_rounds * config.local_epochs
     data_loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True)
 

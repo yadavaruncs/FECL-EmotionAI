@@ -5,14 +5,14 @@ Runs the full experiment suite for FECL-EmotionAI and writes:
   results/privacy_utility.png          -- macro-F1 vs. privacy budget (epsilon)
   results/confusion_matrix_centralized.png
   results/confusion_matrix_federated.png
+  results/confusion_matrix_federated_dp.png
 
   python run_experiments.py
 
 All numbers in results.csv are produced by actually running the training
 and evaluation code in this repository -- nothing here is hand-entered.
-If a stage cannot run in a given environment, its row is written with
-metric columns set to "not_run" and a note explaining why, instead of a
-fabricated number.
+If any stage fails, the script stops with the error; it never writes a
+partial or placeholder table.
 """
 
 import csv
@@ -33,6 +33,7 @@ from train import save_checkpoint, train_centralized
 
 DP_NOISE_SWEEP = [0.5, 1.0, 1.5]
 HEADLINE_NOISE_MULTIPLIER = 1.0
+IID_ALPHA = 100.0  # near-uniform Dirichlet split, for the IID-federated control
 
 RESULTS_CSV_FIELDS = [
     "experiment_group",
@@ -73,7 +74,7 @@ def main():
     # ------------------------------------------------------------------
     # 1. Centralized baseline
     # ------------------------------------------------------------------
-    print("\n[1/4] Training centralized baseline...")
+    print("\n[1/6] Training centralized baseline...")
     t0 = time.time()
     centralized_state = train_centralized(train_embeddings, train_labels, config)
     print(f"  done in {time.time() - t0:.1f}s")
@@ -95,14 +96,17 @@ def main():
             "Centralized",
             centralized_metrics["accuracy"],
             centralized_metrics["macro_f1"],
-            notes="Single model trained on the full pooled training set (CE + SupCon).",
+            notes=(
+                "Single model trained on the full pooled training set (CE + SupCon), "
+                f"{config.num_rounds * config.local_epochs} epochs."
+            ),
         )
     )
 
     # ------------------------------------------------------------------
     # 2. Federated (no DP)
     # ------------------------------------------------------------------
-    print("\n[2/4] Training federated (FedAvg, no DP)...")
+    print("\n[2/6] Training federated (FedAvg, no DP)...")
     t0 = time.time()
     federated_state, federated_history, _ = run_federated_training(
         train_embeddings, train_labels, val_embeddings, val_labels, config, use_dp=False
@@ -136,12 +140,16 @@ def main():
     # ------------------------------------------------------------------
     # 3. Federated + DP sweep (privacy-utility trade-off)
     # ------------------------------------------------------------------
-    print("\n[3/4] Training federated + differential privacy sweep...")
+    print("\n[3/6] Training federated + differential privacy sweep...")
     privacy_utility_points = []  # (noise_multiplier, epsilon, macro_f1, accuracy)
     headline_dp_metrics = None
 
     for noise_multiplier in DP_NOISE_SWEEP:
-        dp_config = dataclasses.replace(config, dp_noise_multiplier=noise_multiplier)
+        # CE only under DP: SupCon couples samples within a batch, which breaks
+        # DP-SGD's per-example-loss assumption (federated.py enforces this too).
+        dp_config = dataclasses.replace(
+            config, dp_noise_multiplier=noise_multiplier, use_supcon=False
+        )
         print(f"  noise_multiplier={noise_multiplier} ...")
         t0 = time.time()
         dp_state, dp_history, epsilon_log = run_federated_training(
@@ -169,7 +177,10 @@ def main():
                 dp_metrics["macro_f1"],
                 epsilon=epsilon,
                 delta=str(config.dp_delta),
-                notes="Opacus DP-SGD per client; epsilon computed by Opacus's RDP accountant.",
+                notes=(
+                    "Opacus DP-SGD per client, CE only (SupCon off under DP); epsilon = worst "
+                    "client, from Opacus's PRV accountant (default)."
+                ),
             )
         )
 
@@ -202,7 +213,7 @@ def main():
     # ------------------------------------------------------------------
     # 4. SupCon ablation: CE-only vs CE + SupCon (federated setting)
     # ------------------------------------------------------------------
-    print("\n[4/4] Running SupCon ablation (CE-only vs CE + SupCon)...")
+    print("\n[4/6] Running SupCon ablation (CE-only vs CE + SupCon)...")
     ce_only_config = dataclasses.replace(config, use_supcon=False)
     t0 = time.time()
     ce_only_state, _, _ = run_federated_training(
@@ -232,6 +243,75 @@ def main():
             notes=f"lambda={config.supcon_lambda}, temperature={config.supcon_temperature}.",
         )
     )
+
+    # ------------------------------------------------------------------
+    # 5. IID-federated control: same code, near-uniform split (alpha=100).
+    #    Separates the cost of federation itself from the cost of label skew.
+    # ------------------------------------------------------------------
+    print(f"\n[5/6] Running IID-federated control (alpha={IID_ALPHA})...")
+    iid_config = dataclasses.replace(config, dirichlet_alpha=IID_ALPHA)
+    t0 = time.time()
+    iid_state, _, _ = run_federated_training(
+        train_embeddings, train_labels, val_embeddings, val_labels, iid_config, use_dp=False
+    )
+    print(f"  done in {time.time() - t0:.1f}s")
+    model = ClassifierHead(config)
+    model.load_state_dict(iid_state)
+    iid_metrics = evaluate_model(model, test_embeddings, test_labels, config.label_names)
+    print(f"  IID-federated test accuracy={iid_metrics['accuracy']:.4f} macro_f1={iid_metrics['macro_f1']:.4f}")
+    rows.append(
+        _row(
+            "controls",
+            f"Federated, IID (alpha={IID_ALPHA:g})",
+            iid_metrics["accuracy"],
+            iid_metrics["macro_f1"],
+            notes="Same as the main federated run except a near-uniform split; isolates label-skew cost.",
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # 6. Clipping-only control: DP-SGD machinery with noise_multiplier=0.
+    #    Separates the cost of per-sample clipping from the cost of noise.
+    # ------------------------------------------------------------------
+    print("\n[6/6] Running DP clipping-only control (noise_multiplier=0)...")
+    clip_config = dataclasses.replace(config, dp_noise_multiplier=0.0, use_supcon=False)
+    t0 = time.time()
+    clip_state, _, _ = run_federated_training(
+        train_embeddings, train_labels, val_embeddings, val_labels, clip_config, use_dp=True
+    )
+    print(f"  done in {time.time() - t0:.1f}s")
+    model = ClassifierHead(config)
+    model.load_state_dict(clip_state)
+    clip_metrics = evaluate_model(model, test_embeddings, test_labels, config.label_names)
+    print(f"  clipping-only test accuracy={clip_metrics['accuracy']:.4f} macro_f1={clip_metrics['macro_f1']:.4f}")
+    rows.append(
+        _row(
+            "controls",
+            "Federated + DP clipping only (noise_multiplier=0)",
+            clip_metrics["accuracy"],
+            clip_metrics["macro_f1"],
+            epsilon="inf",
+            notes=(
+                f"Per-sample clipping (max_grad_norm={config.dp_max_grad_norm}), no noise, CE only. "
+                "No privacy guarantee; isolates the cost of clipping."
+            ),
+        )
+    )
+
+    # Test-set predictions per class (confusion-matrix column sums), so a
+    # model that never predicts some classes is visible in the log.
+    print("\nTest-set predictions per class:")
+    for name, metrics in [
+        ("centralized", centralized_metrics),
+        ("federated", federated_metrics),
+        ("federated_dp", headline_dp_metrics),
+        ("iid_federated", iid_metrics),
+        ("dp_clip_only", clip_metrics),
+    ]:
+        if metrics is None:
+            continue
+        col_sums = metrics["confusion_matrix"].sum(axis=0).tolist()
+        print(f"  {name:>14}: " + ", ".join(f"{l}={c}" for l, c in zip(config.label_names, col_sums)))
 
     # ------------------------------------------------------------------
     # Write results.csv

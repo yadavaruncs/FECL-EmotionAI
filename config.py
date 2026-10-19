@@ -7,6 +7,10 @@ import os
 # their own copies of the OpenMP runtime. Must be set before torch is
 # imported anywhere in the project, so it lives at the top of config.py,
 # which every other module imports first.
+# CAVEAT: Intel documents this as an unsafe, unsupported workaround -- it lets
+# two OpenMP runtimes coexist in one process, which can crash or silently
+# produce wrong results. Acceptable for a local demo; the proper fix is an
+# environment with a single OpenMP runtime (e.g. pip-only or conda-only).
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 from dataclasses import dataclass, field

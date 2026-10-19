@@ -40,20 +40,27 @@ def load_emotion_dataset(config: Config) -> Dict[str, Tuple[list, np.ndarray]]:
     return splits
 
 
-def _cache_path(split: str, config: Config) -> Path:
-    key = f"{config.dataset_name}-{config.encoder_name}-{config.max_seq_length}-{split}"
-    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
-    return CACHE_DIR / f"embeddings_{split}_{digest}.npz"
+def _cache_path(texts, split: str, config: Config, cache_dir: Path = None) -> Path:
+    # The key covers the actual texts, not just the split name, so changing
+    # the sentences can never silently return stale embeddings.
+    hasher = hashlib.sha1()
+    hasher.update(f"{config.dataset_name}-{config.encoder_name}-{config.max_seq_length}-{split}".encode("utf-8"))
+    for text in texts:
+        hasher.update(b"\x00")
+        hasher.update(text.encode("utf-8"))
+    digest = hasher.hexdigest()[:16]
+    return (cache_dir or CACHE_DIR) / f"embeddings_{split}_{digest}.npz"
 
 
 def get_frozen_embeddings(
-    texts, labels: np.ndarray, split: str, config: Config
+    texts, labels: np.ndarray, split: str, config: Config, cache_dir: Path = None
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Compute (or load from cache) frozen-encoder embeddings for a split.
 
+    `cache_dir` defaults to the project's .cache/ (tests pass a temp dir).
     Returns (embeddings [N, embedding_dim], labels [N]).
     """
-    cache_file = _cache_path(split, config)
+    cache_file = _cache_path(texts, split, config, cache_dir)
     if cache_file.exists():
         data = np.load(cache_file)
         return data["embeddings"], data["labels"]

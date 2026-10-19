@@ -148,6 +148,14 @@ A real ablation (CE-only vs. CE+SupCon, identical partition/seed/rounds) is in
 `results/results.csv` under `experiment_group=supcon_ablation` — see §10 for
 the honest result and why it looks the way it does.
 
+**SupCon is switched off in every DP run.** DP-SGD's guarantee assumes the
+loss is a sum of per-example losses, so each example's clipped gradient
+depends on that example alone. SupCon breaks this: each sample's contrastive
+term uses every other sample in the batch, so changing one sentence changes
+the others' gradients too (the same reason Opacus rejects BatchNorm — but it
+cannot detect a batch-coupled loss). `federated._train_local_model` therefore
+trains DP clients with cross-entropy only, regardless of `config.use_supcon`.
+
 ## 9. Evaluation methodology
 
 Every approach (centralized / federated / federated+DP) is evaluated with the
@@ -166,7 +174,12 @@ Default configuration (all in `config.py`): 3 clients, Dirichlet
 `max_grad_norm=1.0, delta=1e-5`, noise-multiplier sweep `[0.5, 1.0, 1.5]`.
 
 All numbers below come from an actual run of `run_experiments.py` in this
-environment (CPU only, no GPU) — see `results/results.csv` for the raw table.
+environment (CPU only, no GPU), single seed (42) — see `results/results.csv`
+for the raw table. Privacy budgets are computed by Opacus's default **PRV
+(Privacy Random Variable) accountant**, which gives a tighter epsilon than the
+older RDP accountant for the same training (at noise 1.0 the worst client is
+epsilon≈1.37 with PRV; RDP would report ≈1.61). The reported epsilon is the
+worst (largest) of the three clients' cumulative budgets.
 
 ### Headline comparison
 
@@ -176,14 +189,16 @@ environment (CPU only, no GPU) — see `results/results.csv` for the raw table.
 |---|---|---|---|
 | Centralized | 0.6590 | 0.5606 | — |
 | Federated (FedAvg) | 0.5865 | 0.4309 | — |
-| Federated + DP (noise=1.0) | 0.5010 | 0.2046 | 1.374 |
+| Federated + DP (noise=1.0) | 0.4920 | 0.2023 | 1.374 |
 
 Going centralized → federated costs about 13 points of Macro-F1 (0.561 →
-0.431) under this non-IID split (`alpha=0.3`, 3 clients) — a real, measured
-cost of not centralizing data, not a rounding error. Adding DP-SGD on top
-costs roughly another 23 points of Macro-F1 at a reasonably strong privacy
-budget (epsilon≈1.37) — DP is expensive, and this project shows exactly how
-expensive instead of asserting it.
+0.431) under this non-IID split (`alpha=0.3`, 3 clients). That gap is
+**mostly label skew, not federation itself**: the IID-federated control
+below (same code, `alpha=100`) reaches 0.549, only ~1 point under
+centralized. The partition at `alpha=0.3` is extreme — client 0 has zero
+`joy` and zero `love`, client 2 is ~77% `joy`. Adding DP-SGD on top costs
+another ~23 points of Macro-F1 at epsilon≈1.37 — and, as the next section
+shows, that DP number reflects a collapsed model, not a usable one.
 
 ### Privacy-utility trade-off
 
@@ -191,20 +206,26 @@ expensive instead of asserting it.
 
 | Noise multiplier | epsilon | Accuracy | Macro-F1 |
 |---|---|---|---|
-| 0.5 | 10.969 | 0.5150 | 0.2117 |
-| 1.0 | 1.374 | 0.5010 | 0.2046 |
-| 1.5 | 0.705 | 0.4965 | 0.2019 |
+| 0 (clipping only, control) | ∞ (no guarantee) | 0.6055 | 0.4268 |
+| 0.5 | 10.969 | 0.5085 | 0.2089 |
+| 1.0 | 1.374 | 0.4920 | 0.2023 |
+| 1.5 | 0.705 | 0.4930 | 0.2023 |
 
-The trend is monotonic and in the expected direction: lower epsilon (stronger
-privacy) costs more Macro-F1. The curve is fairly flat across this sweep
-because at only 5 rounds x 2 local epochs, DP-SGD's clipping (not just the
-added noise) is already the dominant source of signal loss — clipping every
-per-sample gradient to `max_grad_norm=1.0` bounds the model far below its
-non-DP federated ceiling (0.431) even before any noise is added, so
-increasing the noise multiplier further only degrades it a little more. A
-longer training budget or per-round noise decay would likely show a steeper
-curve; the honest result here is a real ceiling effect from a lightweight
-DP-SGD configuration, not a fabricated trend.
+**At this budget (5 rounds x 2 local epochs, batch 32), every DP run with
+noise collapses to the two majority classes.** The noise-1.0 model predicts
+only `sadness` (1,263 test sentences) and `joy` (737); `love`, `anger`,
+`fear` and `surprise` are never predicted. That is why accuracy stays near
+0.50 (those two classes are ~64% of the test set) while Macro-F1 falls to
+~0.20 — and why the curve is flat: all three noisy runs land in the same
+collapsed state, so the sweep does not really trace a trade-off.
+
+The clipping-only control (same DP-SGD machinery, `noise_multiplier=0`)
+reaches Macro-F1 0.427, essentially the non-DP federated 0.431. So
+**per-sample clipping is not what breaks the model — the added noise is.**
+The honest conclusion is that this DP configuration is not usable yet. The
+standard fixes are larger batches (noise is added once per batch, so a
+bigger batch raises the signal-to-noise ratio of each step) and more
+training steps; both are future work (§17).
 
 ### SupCon ablation
 
@@ -213,15 +234,23 @@ DP-SGD configuration, not a fabricated trend.
 | Federated, CE only | 0.5885 | 0.4215 |
 | Federated, CE + SupCon | 0.5865 | 0.4309 |
 
-SupCon gives a small Macro-F1 improvement (+0.0094) at essentially flat
+SupCon gives a small Macro-F1 difference (+0.0094) at essentially flat
 accuracy (-0.002), using an identical partition/seed/rounds for both runs.
-That is a modest but genuine effect, consistent with what the mechanism
-predicts: SupCon shapes the shared trunk's representation to separate
-classes better (which specifically helps minority classes and therefore
-Macro-F1), while doing little for overall accuracy, which is already
-dominated by the majority classes. With a frozen encoder and only ~5,300
-training samples per client, a bigger gain would be surprising — SupCon
-reshapes a ~100K-parameter trunk, not the encoder itself.
+This is **one run per configuration on one seed**, and a 0.009 Macro-F1
+difference is within normal seed-to-seed variation — so it is a small,
+not-yet-significant improvement. Claiming a real effect would need 3–5 seeds
+and a confidence interval. The direction is at least consistent with the
+mechanism (SupCon shapes the shared trunk to separate classes, which would
+help minority-class F1 more than accuracy), and with a frozen encoder a large
+gain would be surprising: SupCon reshapes a ~100K-parameter trunk, not the
+encoder itself.
+
+### Controls
+
+| Control | Accuracy | Macro-F1 | What it isolates |
+|---|---|---|---|
+| Federated, IID (`alpha=100`) | 0.6495 | 0.5494 | Cost of federation alone (vs. centralized 0.5606) |
+| Federated + DP, clipping only (`noise=0`) | 0.6055 | 0.4268 | Cost of per-sample clipping alone (vs. federated 0.4309) |
 
 ### Confusion matrices
 
@@ -242,7 +271,7 @@ reshapes a ~100K-parameter trunk, not the encoder itself.
   effect without needing a cluster; `config.num_clients` is one line to raise.
 - **Dirichlet non-IID partitioning**, not a random/IID split — a random split
   would hide exactly the failure mode federated learning has to survive in
-  practice (see §6, §9 above).
+  practice (see §6, §9). The IID run is kept only as a control (§10).
 - **Sample-weighted FedAvg**, not unweighted averaging — a client with more
   local data should influence the global model proportionally more; verified
   against a hand-computed value in tests, not just "trust the library".
@@ -252,7 +281,12 @@ reshapes a ~100K-parameter trunk, not the encoder itself.
 - **Persistent per-client `PrivacyEngine` across rounds** (`federated.py`) —
   a client's cumulative privacy spend must accumulate over every round it
   participates in, not reset every round; the reported epsilon is the true
-  cumulative value from Opacus's accountant.
+  cumulative value from Opacus's PRV accountant (worst client).
+- **Cross-entropy only under DP.** SupCon couples samples within a batch,
+  which would void DP-SGD's per-example guarantee (§8), so it is disabled in
+  DP mode in code, not just by convention.
+- **Centralized training budget = 10 epochs** (`num_rounds x local_epochs`),
+  so every sample is seen 10 times in both centralized and federated training.
 - **Lightweight, fixed experiment design** (5 rounds, 2 local epochs, one
   noise sweep) instead of a broad hyperparameter search — this project is
   built to be explained end-to-end in an interview, not to chase leaderboard
@@ -260,7 +294,8 @@ reshapes a ~100K-parameter trunk, not the encoder itself.
 
 ## 12. Installation
 
-Requires Python 3.10+. From inside this project folder:
+Requires Python 3.10–3.12 (`numpy<2.0` is pinned, and NumPy 1.26 has no
+wheels for Python 3.13). From inside this project folder:
 
 ```bash
 python -m venv .venv
@@ -292,7 +327,7 @@ python predict.py "I can't believe how happy this makes me feel"
 # Launch the interactive demo (uses checkpoints/federated.pt)
 streamlit run app.py
 
-# Run the test suite
+# Run the test suite (12 tests)
 pytest
 ```
 
@@ -314,10 +349,10 @@ FECL-EmotionAI/
 ├── predict.py                    # single-sentence inference
 ├── run_experiments.py             # runs everything, writes results/
 ├── app.py                          # Streamlit demo
-├── tests/
-│   ├── test_data.py
-│   ├── test_federated.py
-│   └── test_model.py
+├── tests/                          # 12 pytest tests
+│   ├── test_data.py               # 3: splits, embedding cache (temp dir), cache key
+│   ├── test_federated.py          # 5: partition, FedAvg, empty clients, DP smoke test
+│   └── test_model.py              # 4: frozen encoder, head shapes, SupCon edge cases
 └── results/
     ├── results.csv
     ├── results.png
@@ -340,9 +375,21 @@ scikit-learn (metrics), pandas/NumPy, Matplotlib, Streamlit, pytest.
   composition analysis beyond what Opacus's accountant reports per client.
 - Fixed, lightweight hyperparameters by design (§11) — not a hyperparameter
   search.
+- **Single seed.** Every number is one run with seed 42; small differences
+  (e.g. the SupCon ablation) are not statistically established.
+- **The DP configuration collapses** to the two majority classes (§10); the
+  DP rows show the formal epsilon accounting working, not a usable private
+  model.
+- `config.py` sets `KMP_DUPLICATE_LIB_OK=TRUE` to avoid an OpenMP
+  double-initialization crash on some Windows setups. Intel documents this as
+  an unsafe workaround that can give wrong results; fine for a local demo, not
+  for production.
 
 ## 17. Future work
 
+- **Make DP usable:** larger batches (e.g. 256+) and more rounds, re-running
+  the sweep to get a real trade-off curve instead of a collapsed model.
+- **Multiple seeds** (3–5) with confidence intervals for every comparison.
 - **FedProx** — a proximal term that penalizes local models drifting too far
   from the global model, specifically helpful under strong non-IID data.
 - **Secure aggregation** — server only ever sees the *sum* of client updates,

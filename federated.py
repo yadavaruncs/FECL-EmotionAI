@@ -31,7 +31,9 @@ def dirichlet_partition(
     Dirichlet(alpha) split, producing non-IID label distributions.
 
     Every sample is assigned to exactly one client (the partition covers the
-    whole dataset with no overlap). Lower alpha -> each client's Dirichlet
+    whole dataset with no overlap). At small alpha with many clients a client
+    can receive ZERO samples; run_federated_training skips such clients
+    (they have nothing to train on and would carry FedAvg weight 0). Lower alpha -> each client's Dirichlet
     draw is more skewed towards a few classes -> stronger label imbalance
     between clients.
     """
@@ -99,7 +101,19 @@ def _train_local_model(
     model.load_state_dict(global_state)
     model.train()
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
+    # SupCon couples samples within a batch, which breaks DP-SGD's
+    # per-example-loss assumption (see privacy.py) -- CE only under DP.
+    use_supcon = config.use_supcon and not use_dp
+    if not use_supcon:
+        # Without SupCon the projection head gets no gradient; freeze it so
+        # Opacus doesn't expect per-sample gradients for it. Its weights pass
+        # through FedAvg unchanged and it never affects predictions.
+        for param in model.projection.parameters():
+            param.requires_grad = False
+
+    optimizer = torch.optim.Adam(
+        [p for p in model.parameters() if p.requires_grad], lr=config.learning_rate
+    )
 
     dataset = TensorDataset(
         torch.tensor(embeddings, dtype=torch.float32),
@@ -118,7 +132,7 @@ def _train_local_model(
             optimizer.zero_grad()
             logits, projections = model(batch_embeddings)
             loss = ce_loss_fn(logits, batch_labels)
-            if config.use_supcon:
+            if use_supcon:
                 loss = loss + config.supcon_lambda * supcon_loss(
                     projections, batch_labels, config.supcon_temperature
                 )
@@ -127,7 +141,12 @@ def _train_local_model(
 
     epsilon = None
     if use_dp:
-        epsilon = privacy_engine.get_epsilon(delta=config.dp_delta)
+        # noise_multiplier=0 is the clipping-only control: no noise means no
+        # formal privacy guarantee at all, i.e. epsilon is infinite.
+        if config.dp_noise_multiplier > 0:
+            epsilon = privacy_engine.get_epsilon(delta=config.dp_delta)
+        else:
+            epsilon = float("inf")
         state_dict = unwrap_state_dict(model)
     else:
         state_dict = model.state_dict()
@@ -170,6 +189,8 @@ def run_federated_training(
         round_epsilons = []
 
         for client_id, client_indices in enumerate(client_index_sets):
+            if len(client_indices) == 0:
+                continue  # empty client (possible at small alpha): nothing to train
             client_embeddings = train_embeddings[client_indices]
             client_labels = train_labels[client_indices]
 
@@ -192,6 +213,9 @@ def run_federated_training(
         if round_epsilons:
             epsilon_log.append(max(round_epsilons))
 
+        # Per-round validation is for MONITORING only (convergence curves
+        # printed by train.py). It drives no early stopping or model
+        # selection, so the test set result is not tuned on it.
         eval_model = ClassifierHead(config)
         eval_model.load_state_dict(global_state)
         metrics = evaluate_model(eval_model, val_embeddings, val_labels, config.label_names)

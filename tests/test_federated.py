@@ -64,3 +64,43 @@ def test_fedavg_matches_hand_computed_weighted_average():
     assert torch.allclose(result["weight"], expected_weight)
     # Non-floating-point tensors must not be averaged; they are copied from the first client.
     assert result["count"].item() == 5
+
+
+def test_federated_training_skips_clients_with_zero_samples():
+    import dataclasses
+
+    from config import get_default_config
+    from federated import run_federated_training
+
+    rng = np.random.default_rng(0)
+    labels = rng.integers(0, 6, size=60)
+    embeddings = rng.normal(size=(60, 768)).astype(np.float32)
+    config = dataclasses.replace(
+        get_default_config(), num_clients=20, dirichlet_alpha=0.01, num_rounds=1, local_epochs=1
+    )
+
+    partition = dirichlet_partition(labels, config.num_clients, config.dirichlet_alpha, config.seed)
+    assert any(len(idx) == 0 for idx in partition)  # the edge case actually occurs
+
+    state, history, _ = run_federated_training(embeddings, labels, embeddings, labels, config)
+
+    assert len(history) == 1
+    assert all(torch.isfinite(v).all() for v in state.values() if torch.is_floating_point(v))
+
+
+def test_dp_federated_training_runs_with_supcon_disabled_and_reports_epsilon():
+    import dataclasses
+
+    from config import get_default_config
+    from federated import run_federated_training
+
+    rng = np.random.default_rng(0)
+    labels = rng.integers(0, 6, size=120)
+    embeddings = rng.normal(size=(120, 768)).astype(np.float32)
+    # use_supcon=True on purpose: DP mode must switch SupCon off by itself.
+    config = dataclasses.replace(get_default_config(), num_rounds=2, local_epochs=1, use_supcon=True)
+
+    _, _, epsilon_log = run_federated_training(embeddings, labels, embeddings, labels, config, use_dp=True)
+
+    assert len(epsilon_log) == 2
+    assert 0 < epsilon_log[0] < epsilon_log[1]  # privacy spend accumulates across rounds

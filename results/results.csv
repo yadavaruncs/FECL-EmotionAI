@@ -1,9 +1,11 @@
 experiment_group,approach,accuracy,macro_f1,epsilon,delta,notes
-main_comparison,Centralized,0.6590,0.5606,,,Single model trained on the full pooled training set (CE + SupCon).
+main_comparison,Centralized,0.6590,0.5606,,,"Single model trained on the full pooled training set (CE + SupCon), 10 epochs."
 main_comparison,Federated (FedAvg),0.5865,0.4309,,,"3 clients, Dirichlet alpha=0.3, 5 rounds x 2 local epochs (CE + SupCon)."
-privacy_utility_sweep,Federated + DP (noise_multiplier=0.5),0.5150,0.2117,10.969,1e-05,Opacus DP-SGD per client; epsilon computed by Opacus's RDP accountant.
-privacy_utility_sweep,Federated + DP (noise_multiplier=1.0),0.5010,0.2046,1.374,1e-05,Opacus DP-SGD per client; epsilon computed by Opacus's RDP accountant.
-privacy_utility_sweep,Federated + DP (noise_multiplier=1.5),0.4965,0.2019,0.705,1e-05,Opacus DP-SGD per client; epsilon computed by Opacus's RDP accountant.
-main_comparison,Federated + DP (noise_multiplier=1.0),0.5010,0.2046,1.374,1e-05,Headline DP configuration used in the main comparison chart.
+privacy_utility_sweep,Federated + DP (noise_multiplier=0.5),0.5085,0.2089,10.969,1e-05,"Opacus DP-SGD per client, CE only (SupCon off under DP); epsilon = worst client, from Opacus's PRV accountant (default)."
+privacy_utility_sweep,Federated + DP (noise_multiplier=1.0),0.4920,0.2023,1.374,1e-05,"Opacus DP-SGD per client, CE only (SupCon off under DP); epsilon = worst client, from Opacus's PRV accountant (default)."
+privacy_utility_sweep,Federated + DP (noise_multiplier=1.5),0.4930,0.2023,0.705,1e-05,"Opacus DP-SGD per client, CE only (SupCon off under DP); epsilon = worst client, from Opacus's PRV accountant (default)."
+main_comparison,Federated + DP (noise_multiplier=1.0),0.4920,0.2023,1.374,1e-05,Headline DP configuration used in the main comparison chart.
 supcon_ablation,"Federated, CE only",0.5885,0.4215,,,"Same partition/seed/rounds as the main federated run, SupCon disabled."
 supcon_ablation,"Federated, CE + SupCon",0.5865,0.4309,,,"lambda=0.1, temperature=0.07."
+controls,"Federated, IID (alpha=100)",0.6495,0.5494,,,Same as the main federated run except a near-uniform split; isolates label-skew cost.
+controls,Federated + DP clipping only (noise_multiplier=0),0.6055,0.4268,inf,,"Per-sample clipping (max_grad_norm=1.0), no noise, CE only. No privacy guarantee; isolates the cost of clipping."
