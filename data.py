@@ -16,6 +16,7 @@ the README.
 """
 
 import hashlib
+import os
 from pathlib import Path
 from typing import Dict, Tuple
 
@@ -62,14 +63,17 @@ def get_frozen_embeddings(
     """
     cache_file = _cache_path(texts, split, config, cache_dir)
     if cache_file.exists():
-        data = np.load(cache_file)
-        return data["embeddings"], data["labels"]
+        # Labels come from the caller: the cache key covers texts only.
+        return np.load(cache_file)["embeddings"], labels
 
     encoder = FrozenEncoder(config)
     embeddings = encoder.encode_texts(texts, batch_size=config.embedding_batch_size)
     embeddings = embeddings.numpy()
 
-    np.savez(cache_file, embeddings=embeddings, labels=labels)
+    # Write to a temp file, then rename, so an interrupted write never leaves a corrupt cache entry.
+    tmp_file = cache_file.with_suffix(".tmp.npz")
+    np.savez(tmp_file, embeddings=embeddings, labels=labels)
+    os.replace(tmp_file, cache_file)
     return embeddings, labels
 
 

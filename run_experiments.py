@@ -71,6 +71,11 @@ def main():
     test_embeddings, test_labels = embeddings["test"]
     print(f"train={len(train_labels)}  val={len(val_labels)}  test={len(test_labels)}")
 
+    def test_metrics(state_dict):
+        model = ClassifierHead(config)
+        model.load_state_dict(state_dict)
+        return evaluate_model(model, test_embeddings, test_labels, config.label_names)
+
     # ------------------------------------------------------------------
     # 1. Centralized baseline
     # ------------------------------------------------------------------
@@ -79,9 +84,7 @@ def main():
     centralized_state = train_centralized(train_embeddings, train_labels, config)
     print(f"  done in {time.time() - t0:.1f}s")
 
-    model = ClassifierHead(config)
-    model.load_state_dict(centralized_state)
-    centralized_metrics = evaluate_model(model, test_embeddings, test_labels, config.label_names)
+    centralized_metrics = test_metrics(centralized_state)
     print(f"  test accuracy={centralized_metrics['accuracy']:.4f} macro_f1={centralized_metrics['macro_f1']:.4f}")
     save_checkpoint(centralized_state, "centralized")
     plot_confusion_matrix(
@@ -113,9 +116,7 @@ def main():
     )
     print(f"  done in {time.time() - t0:.1f}s")
 
-    model = ClassifierHead(config)
-    model.load_state_dict(federated_state)
-    federated_metrics = evaluate_model(model, test_embeddings, test_labels, config.label_names)
+    federated_metrics = test_metrics(federated_state)
     print(f"  test accuracy={federated_metrics['accuracy']:.4f} macro_f1={federated_metrics['macro_f1']:.4f}")
     save_checkpoint(federated_state, "federated")
     plot_confusion_matrix(
@@ -158,9 +159,7 @@ def main():
         elapsed = time.time() - t0
         epsilon = epsilon_log[-1] if epsilon_log else float("nan")
 
-        model = ClassifierHead(config)
-        model.load_state_dict(dp_state)
-        dp_metrics = evaluate_model(model, test_embeddings, test_labels, config.label_names)
+        dp_metrics = test_metrics(dp_state)
         print(
             f"    done in {elapsed:.1f}s | epsilon={epsilon:.3f} "
             f"accuracy={dp_metrics['accuracy']:.4f} macro_f1={dp_metrics['macro_f1']:.4f}"
@@ -220,9 +219,7 @@ def main():
         train_embeddings, train_labels, val_embeddings, val_labels, ce_only_config, use_dp=False
     )
     print(f"  done in {time.time() - t0:.1f}s")
-    model = ClassifierHead(config)
-    model.load_state_dict(ce_only_state)
-    ce_only_metrics = evaluate_model(model, test_embeddings, test_labels, config.label_names)
+    ce_only_metrics = test_metrics(ce_only_state)
     print(f"  CE-only test accuracy={ce_only_metrics['accuracy']:.4f} macro_f1={ce_only_metrics['macro_f1']:.4f}")
 
     rows.append(
@@ -255,9 +252,7 @@ def main():
         train_embeddings, train_labels, val_embeddings, val_labels, iid_config, use_dp=False
     )
     print(f"  done in {time.time() - t0:.1f}s")
-    model = ClassifierHead(config)
-    model.load_state_dict(iid_state)
-    iid_metrics = evaluate_model(model, test_embeddings, test_labels, config.label_names)
+    iid_metrics = test_metrics(iid_state)
     print(f"  IID-federated test accuracy={iid_metrics['accuracy']:.4f} macro_f1={iid_metrics['macro_f1']:.4f}")
     rows.append(
         _row(
@@ -280,9 +275,7 @@ def main():
         train_embeddings, train_labels, val_embeddings, val_labels, clip_config, use_dp=True
     )
     print(f"  done in {time.time() - t0:.1f}s")
-    model = ClassifierHead(config)
-    model.load_state_dict(clip_state)
-    clip_metrics = evaluate_model(model, test_embeddings, test_labels, config.label_names)
+    clip_metrics = test_metrics(clip_state)
     print(f"  clipping-only test accuracy={clip_metrics['accuracy']:.4f} macro_f1={clip_metrics['macro_f1']:.4f}")
     rows.append(
         _row(

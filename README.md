@@ -363,7 +363,7 @@ FECL-EmotionAI/
 ## 15. Technologies
 
 Python, PyTorch, HuggingFace Transformers & Datasets, Opacus (DP-SGD),
-scikit-learn (metrics), pandas/NumPy, Matplotlib, Streamlit, pytest.
+scikit-learn (metrics), NumPy, Matplotlib, Streamlit, pytest.
 
 ## 16. Limitations
 

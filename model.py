@@ -44,11 +44,6 @@ class FrozenEncoder:
         for param in self.model.parameters():
             param.requires_grad = False
 
-    @property
-    def encoder_module(self) -> nn.Module:
-        """Expose the underlying nn.Module (e.g. to assert requires_grad in tests)."""
-        return self.model
-
     @torch.no_grad()
     def encode_texts(self, texts: List[str], batch_size: int = 32) -> torch.Tensor:
         """Mean-pool (attention-mask aware) last hidden states into one vector per text."""

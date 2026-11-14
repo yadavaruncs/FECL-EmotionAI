@@ -14,7 +14,7 @@ from model import ClassifierHead, FrozenEncoder, supcon_loss
 def test_frozen_encoder_has_no_trainable_parameters():
     config = get_default_config()
     encoder = FrozenEncoder(config)
-    params = list(encoder.encoder_module.parameters())
+    params = list(encoder.model.parameters())
     assert len(params) > 0
     assert all(not p.requires_grad for p in params)
 
