@@ -30,6 +30,16 @@ with an actual, computed `(epsilon, delta)` privacy guarantee. Compare all
 three regimes — centralized, federated, federated+DP — on one shared held-out
 test set.
 
+**Stack:** Python 3.10–3.12, PyTorch, Hugging Face Transformers/Datasets, Opacus, scikit-learn, NumPy, Matplotlib, Streamlit, pytest.
+
+## Pipeline and operations
+
+- **Dataset and feature cache:** `data.py` downloads the official train/validation/test splits from Hugging Face at runtime. Since DistilBERT is frozen, each split is encoded once in batches (default 32) and cached as an `.npz` under `.cache/`. The cache key includes the dataset name, encoder, max sequence length, split, and the full input text sequence, so changed text/configuration gets a different file. A temporary file is written and then atomically replaced into place; labels are taken from the currently loaded dataset when a cache hit is used. Dataset/model downloads and the cache live outside version control.
+- **Experiment orchestration:** `run_experiments.py` loads/reuses those embeddings, then runs the centralized baseline, sequential simulated FedAvg clients, the DP noise sweep, the SupCon ablation, an IID-split control, and a clipping-only control. Client partitions are made from the training labels with a seeded Dirichlet draw; empty clients are skipped. Each round trains clients locally and aggregates model weights by sample count. The validation split is logged per round for monitoring; the common global test split is used for reported comparison metrics.
+- **Privacy accounting and constraints:** DP training wraps each client with an Opacus `PrivacyEngine` that is retained across that client's rounds, so its reported epsilon accumulates across participation. The reported sweep value is the maximum client epsilon. DP mode disables SupCon and uses cross-entropy only because SupCon couples examples within a batch, violating DP-SGD's per-example-loss assumption. This is a single-machine simulation with sequential client execution, not a distributed network deployment.
+- **Artifacts and recovery:** `train.py` writes a mode checkpoint to `checkpoints/<mode>.pt`; the full experiment script writes checkpoints for the main centralized, federated, and headline DP models plus `results/results.csv` and diagnostic plots. `evaluate.py` reloads embeddings and a checkpoint to evaluate on the held-out test split. The Streamlit app expects `checkpoints/federated.pt` and explicitly refuses to substitute an unrelated pretrained classifier when it is absent. The experiment script stops on an exception and writes the result table only after the experiment stages complete; rerun the failed command after resolving the cause. Checkpoints and embedding caches are local generated state, not committed source artifacts.
+- **Testing:** `pytest` covers split loading, embedding-cache correctness, partition coverage, FedAvg arithmetic, empty-client handling, DP epsilon accumulation, frozen-encoder properties, and SupCon edge cases. The data tests intentionally use the real Hugging Face dataset and DistilBERT encoder, so the first test run needs network access/model downloads unless those assets are already cached; only the cache-key checks use a temporary directory.
+
 ## 3. Architecture
 
 ```
