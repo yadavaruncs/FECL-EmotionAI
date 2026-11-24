@@ -6,6 +6,10 @@ A compact experiment measuring how much emotion-classification
 performance actually costs when you move from centralized training to
 **federated learning**, and then add **differential privacy** on top.
 
+Model: DistilBERT-based emotion classification with a frozen transformer
+encoder and a trainable classification head. DistilBERT itself is not
+fine-tuned; only the ~116K-parameter head is trained (see §5).
+
 ![Results](results/results.png)
 
 ---
